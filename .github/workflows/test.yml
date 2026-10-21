@@ -1,0 +1,35 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 与 package.json 的 engines 对齐：^22.19.0 || >=24.0.0
+        node: ['22.19', '24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 本插件零运行时依赖（只用 Node 内置模块），所以没有 install 步骤。
+      # 如果哪天引入了 dependencies，这里必须补上 npm ci。
+      - name: host self-test
+        run: node scripts/selftest.mjs
+
+      - name: client self-test
+        run: node scripts/client-test.mjs
+
+      - name: dead-code scan
+        run: node scripts/deadcode.mjs
