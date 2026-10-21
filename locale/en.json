@@ -1,0 +1,4 @@
+{
+  "displayName": "Endpoint quotas",
+  "description": "Tracks credit/token spend per endpoint; when an endpoint runs out it switches to another endpoint of the same model, and falls back to the official DeepSeek model when none is left."
+}

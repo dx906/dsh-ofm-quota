@@ -1,0 +1,60 @@
+{
+  "name": "dsh-ofm-quota",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH 配额管理插件：实时统计每次对话所用接口的积分/Token 消耗，接口额度耗尽时自动切换到同名模型的备用接口，全部第三方接口无额度时兜底切到 DeepSeek 官方模型；并提供右侧栏卡片展示各接口剩余额度。",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "locale",
+    "README.md",
+    "README.en.md",
+    "LICENSE",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "test": "node scripts/selftest.mjs && node scripts/client-test.mjs",
+    "test:host": "node scripts/selftest.mjs",
+    "test:client": "node scripts/client-test.mjs",
+    "deadcode": "node scripts/deadcode.mjs"
+  },
+  "author": "dx906",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dx906/dsh-ofm-quota.git"
+  },
+  "homepage": "https://github.com/dx906/dsh-ofm-quota#readme",
+  "bugs": {
+    "url": "https://github.com/dx906/dsh-ofm-quota/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "quota",
+    "our-free-model",
+    "llm-failover"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}
