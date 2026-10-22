@@ -64,6 +64,11 @@ window.__ModuleLoader__.load({
 .ofmq-row:hover { background:color-mix(in srgb, currentColor 5%, transparent); }
 .ofmq-row-blocked { border-color:color-mix(in srgb, var(--dsw-alias-state-warn-primary,#e0a030) 45%, transparent); }
 .ofmq-row-exhausted { border-color:color-mix(in srgb, var(--dsw-alias-state-error-primary,#e05252) 45%, transparent); }
+/* 官方计费路由：压暗 + 虚线边，与免费车道一眼可分（它不是一条可用车道，
+   出现在列表里只代表"有过调用记录"）。 */
+.ofmq-row-official { opacity:.62; border-style:dashed; }
+.ofmq-row-official .ofmq-lane { opacity:.85;
+  border-color:color-mix(in srgb, var(--dsw-alias-state-warn-primary,#e0a030) 50%, transparent); }
 .ofmq-line1 { display:flex; align-items:baseline; gap:6px; }
 .ofmq-model { font-weight:600; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
 .ofmq-lane { font-size:10px; padding:0 5px; border-radius:4px; opacity:.75;
@@ -203,30 +208,41 @@ window.__ModuleLoader__.load({
     function ChannelCard({ card }) {
       const [open, setOpen] = useState(false)
       const known = card.quotaKnown === true
+      // 官方路由（`deepseek-account`，按量计费）与免费车道是两套计费体系。它出现在
+      // 列表里只因为「有过调用记录」，**不是一条可用车道**，所以视觉上必须可区分：
+      // 灰底 + 明确徽标，否则用户会以为它也是免费额度的一部分。
+      const official = card.official === true
       // 不画进度条：上游只给「剩余」，不给「总额」，任何比例都是编造的。
       // 之前用 0.5/0.7 常量填宽度，纯粹是假象（死代码审计 M-13）。
-      const rowClass = !known
-        ? 'ofmq-row'
-        : card.remaining <= 0 ? 'ofmq-row ofmq-row-exhausted' : 'ofmq-row'
+      const rowClass = official
+        ? 'ofmq-row ofmq-row-official'
+        : !known
+          ? 'ofmq-row'
+          : card.remaining <= 0 ? 'ofmq-row ofmq-row-exhausted' : 'ofmq-row'
       const accountLine = card.accountCount > 1
         ? `${card.accountCount} ${t('个账号', 'accounts')}`
         : (card.rows?.[0]?.nickname || t('1 个账号', '1 account'))
       return createElement('div', { className: rowClass },
         createElement('div', { className: 'ofmq-line1' },
           createElement('span', { className: 'ofmq-model' }, card.displayName || card.provider),
+          official
+            ? createElement('span', { className: 'ofmq-lane' }, t('官方 · 计费', 'official · billed'))
+            : null,
           createElement('span', { className: 'ofmq-lane' }, accountLine),
           card.enabled === false
             ? createElement('span', { className: 'ofmq-lane', style: { opacity: 0.55 } }, t('已停用', 'disabled'))
             : null,
         ),
         createElement('div', { className: 'ofmq-line2' },
-          known
-            ? createElement('span', null,
-                `${t('剩余', 'left')} ${formatNumber(card.remaining)} ${unitLabel(card.unit)}`)
-            : createElement('span', null,
-                card.refreshedAt === 0
-                  ? t('余额未读取 · 点「刷新余额」', 'not read yet · press Balances')
-                  : t('余额未知', 'quota unknown')),
+          official
+            ? createElement('span', null, t('不参与额度检测', 'not quota-tracked'))
+            : known
+              ? createElement('span', null,
+                  `${t('剩余', 'left')} ${formatNumber(card.remaining)} ${unitLabel(card.unit)}`)
+              : createElement('span', null,
+                  card.refreshedAt === 0
+                    ? t('余额未读取 · 点「刷新余额」', 'not read yet · press Balances')
+                    : t('余额未知', 'quota unknown')),
           createElement('span', null, `${card.models} ${t('个模型', 'models')}`),
         ),
         known
@@ -421,7 +437,9 @@ window.__ModuleLoader__.load({
         createElement('div', { className: 'ofmq-sum' },
           createElement('span', null, t('全部用尽则兜底', 'final fallback')),
           createElement('span', { className: 'ofmq-prov' },
-            status.officialFallback ? `${status.officialFallback.provider}/${status.officialFallback.model}` : '—'),
+            status.officialFallback
+              ? `${status.officialFallback.provider}/${status.officialFallback.model}`
+              : t('已关闭（不会自动走官方计费）', 'off (never bills the official route)')),
         ),
       )
 

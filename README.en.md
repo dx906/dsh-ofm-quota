@@ -4,7 +4,9 @@
 
 **See how much is left. Switch automatically when it runs out.**
 
-Adds **endpoint quota management** to [Our Free Model](https://github.com/Ebony-Vinyl/dsh-our-free-model) on [DSH (DeepSeek Harness)](https://github.com/deepseek-ai): it reports, in real time, which endpoint each conversation actually lands on and how many tokens it spends; when an endpoint runs dry it switches to **another endpoint serving the same model**; and when every third-party endpoint is exhausted it falls back to **official DeepSeek models** — the conversation never stops. A card in the right sidebar lays out how much is left.
+Adds **endpoint quota management** to [Our Free Model](https://github.com/Ebony-Vinyl/dsh-our-free-model) on [DSH (DeepSeek Harness)](https://github.com/deepseek-ai): it reports, in real time, which endpoint each conversation actually lands on and how many tokens it spends, and when an endpoint runs dry it switches to **another endpoint serving the same model**. A card in the right sidebar lays out how much is left.
+
+> **The official route is not a fallback by default.** DSH's built-in `deepseek-account` (the official DeepSeek account) is **billed per token** and is a different system from Our Free Model's free lanes. This plugin will **not** silently switch over to it — when you run out, it reports the failure honestly. Enabling the fallback is an explicit opt-in via `officialFallback`. In the panel, official routes are always labelled "official · billed" and sorted to the bottom, never mixed in with the free lanes.
 
 [![test](https://github.com/dx906/dsh-ofm-quota/actions/workflows/test.yml/badge.svg)](https://github.com/dx906/dsh-ofm-quota/actions/workflows/test.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -41,7 +43,7 @@ The UI shows both: **Model usage detail** displays comparisons like "773 dispatc
 
 ### 2. Automatic failover on quota exhaustion
 
-When quota runs out it **switches to another endpoint of the same model**, and falls back to official DeepSeek models when no third-party endpoint is left.
+When quota runs out it **switches to another endpoint of the same model**. By default it stops there — it does not go on to bill the official route.
 
 ```
 endpoint quota exhausted (QUOTA_EXHAUSTED / 429 / credential revoked)
@@ -49,8 +51,15 @@ endpoint quota exhausted (QUOTA_EXHAUSTED / 429 / credential revoked)
 look along the "same-name family" for a backup endpoint that still has quota
       ↓
 found     → switch over, rerun this step, conversation uninterrupted
-not found → fall back to official DeepSeek models
+not found → report the failure honestly (default)
+            └─ only if officialFallback is explicitly configured, fall back to official DeepSeek
 ```
+
+**Why the official route is off by default**: `deepseek-account` is DSH's built-in official
+account route and is **billed per token**. Falling back to it automatically spends the user's
+money without asking, and the failure is silent — the user just notices things got slower and
+never sees the bill. Reporting the failure and letting the user decide whether the spend is
+worth it is the correct default.
 
 ### 3. Sidebar card
 
@@ -220,7 +229,7 @@ When `connection` is available, its `admit` decides; otherwise the plugin reprod
   "maxSwitchesPerStep": 3,
   "cooldownMs": 900000,
   "windowHours": 24,
-  "officialFallback": { "provider": "deepseek-official", "model": "deepseek-flash" },
+  "officialFallback": null,
   "syncCatalog": true,
   "manualQuota": {}
 }
@@ -234,7 +243,7 @@ When `connection` is available, its `admit` decides; otherwise the plugin reprod
 | `maxSwitchesPerStep` | `3` | Maximum switches per step (prevents chains) |
 | `cooldownMs` | `900000` | Cooldown for a failed endpoint (15 minutes) |
 | `windowHours` | `24` | Usage statistics window |
-| `officialFallback` | Official DeepSeek | Fallback route when all third parties are unavailable |
+| `officialFallback` | **`null` (off)** | Fallback route when all third parties are unavailable. **Off by default because the official route is billed per token**; to enable, use the real provider id: `{ "provider": "deepseek-account", "model": "deepseek-flash" }` |
 | `syncCatalog` | `true` | Sync the endpoint catalog from the OFM catalog at startup |
 | `manualQuota` | `{}` | Hand-entered quota (real reads win; manual is only a fallback) |
 
@@ -295,7 +304,7 @@ pnpm run test:client       # browser half only
 pnpm run deadcode          # dead-code scan
 ```
 
-`scripts/selftest.mjs` (host half, **17 groups**) covers: the real payload shapes and return contracts of all three hooks, same-name backup resolution, the official fallback, on-disk sync (three id shapes in the catalog / channel accounts / token-ledger), the channel balance RPC (owner Peer versus a 403 for non-owners), **positive and negative cases for the route admission fence**, **bounded memory** (512 turn/step entries, 256 agent entries), **quota source precedence (a real read beats a manual entry)**, the HTTP routes, and the **four dead-code audit cases** (account accumulation / cooldown release / failure write-back / reset).
+`scripts/selftest.mjs` (host half, **17 groups**) covers: the real payload shapes and return contracts of all three hooks, same-name backup resolution (including the official route and its legacy alias, which must be excluded), **the official fallback being off by default / opt-in / and able to be turned off again**, on-disk sync (three id shapes in the catalog / channel accounts / token-ledger), the channel balance RPC (owner Peer versus a 403 for non-owners), **positive and negative cases for the route admission fence**, **bounded memory** (512 turn/step entries, 256 agent entries), **quota source precedence (a real read beats a manual entry)**, the HTTP routes, the three contract-audit cases, and the **four dead-code audit cases** (account accumulation / cooldown release / failure write-back / reset).
 
 `scripts/client-test.mjs` covers: the ModuleLoader entry contract, the tab type and the two keyed slot registrations, the component not throwing under minimal props, and **route URLs never carrying a leading slash** (which 404s or crosses origins behind a reverse-proxy prefix or inside a `dsh-app://` shell).
 

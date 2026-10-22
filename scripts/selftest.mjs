@@ -4,7 +4,7 @@
  * 覆盖 17 组（编号见文件内的 `── N.` 注释）：
  *   1. `llm/stream` 旁听 usage、流原样透传
  *   2. 同名备用接口优先 / `-free` 归一 / 官方路由排除
- *   3. 全部耗尽 → 官方兜底
+ *   3. 官方兜底默认关闭（null）/ 显式开启 / 必须能再关掉
  *   4. `agent/request-error` retry + 改写 + 丢 reasoningEffort + abort 保护
  *   5. HTTP 路由基本行为
  *   6. 真实落盘文件同步（catalog 三形态 / 渠道账号 / token-ledger）
@@ -129,25 +129,50 @@ async function main() {
   assert.equal(familyMatch.some(row => row.model === 'kimi-k3-free'), true,
     '-free 后缀的接口应被视为同名备用接口')
 
-  // 2c. 官方路由永远不作为「同名备用接口」（它是兜底）
-  runtime.upsertEndpoint('deepseek-official', 'deepseek-v4.1-flash', { lane: 'official' })
+  // 2c. 官方路由永远不作为「同名备用接口」（它是兜底，且按量计费）
+  // 真实 provider id 是 deepseek-account（内核 @deepseek-ai/dsh-deepseek-account）。
+  runtime.upsertEndpoint('deepseek-account', 'deepseek-v4.1-flash', { lane: 'official' })
   const noOfficial = runtime.alternativesFor('trae', 'deepseek-v4.1-flash')
-  assert.equal(noOfficial.some(row => row.provider === 'deepseek-official'), false,
+  assert.equal(noOfficial.some(row => row.provider === 'deepseek-account'), false,
     '官方路由不应出现在同名备用接口里')
+  // 旧别名也要认出来：早期版本把 id 写成了不存在的 deepseek-official，已经落盘的
+  // 旧设置里可能是它，不能因为拼错就被当成一条普通免费车道。
+  runtime.upsertEndpoint('deepseek-official', 'deepseek-v4.1-flash', { lane: 'official' })
+  assert.equal(runtime.alternativesFor('trae', 'deepseek-v4.1-flash')
+    .some(row => row.provider === 'deepseek-official'), false,
+    'deepseek-official 是官方路由的旧别名，同样必须排除')
   assert.equal(decision.model.startsWith('deepseek-v4.1-flash'), true)
 
-  // ── 3. 全部耗尽 → 官方兜底 ─────────────────────────────────
+  // ── 3. 官方兜底默认关闭；显式开启后才生效，且必须能再关掉 ───
   // 把所有仍可用的同名接口逐一标记失败，模拟「第三方接口全都没额度了」。
   for (const row of runtime.alternativesFor('trae', 'deepseek-v4.1-flash')) {
     runtime.recordFailure({ provider: row.provider, model: row.model, code: 'ACCOUNT_QUOTA', message: 'out' })
   }
+  const settingsStore = shared.store.settings
+
+  // 3a. 默认必须是 null —— 官方路由按量计费，静默兜底等于在用户不知情时花钱。
+  assert.equal(settingsNow(shared).officialFallback, null,
+    'officialFallback 默认必须是 null（关）')
+  assert.equal(runtime.decideTarget('trae', 'deepseek-v4.1-flash'), null,
+    '兜底关闭时无备用接口可用必须如实返回 null，而不是偷偷走官方计费')
+
+  // 3b. 显式开启后按**真实** id 兜底。
+  settingsStore.update({ officialFallback: { provider: 'deepseek-account', model: 'deepseek-flash' } })
   const fallback = runtime.decideTarget('trae', 'deepseek-v4.1-flash')
   assert.ok(fallback !== null)
-  // deepseek-official 在 2c 里被登记过同名行，但它必须被排除在「同名备用接口」
-  // 之外，否则兜底永远走不到——这条断言锁住的正是该规则。
-  assert.equal(fallback.reason, 'official-fallback', '备用接口全部耗尽时必须走官方兜底')
-  assert.equal(fallback.provider, 'deepseek-official')
+  assert.equal(fallback.reason, 'official-fallback', '备用接口全部耗尽且兜底开启时走官方兜底')
+  assert.equal(fallback.provider, 'deepseek-account')
   assert.equal(fallback.model, 'deepseek-flash')
+
+  // 3c. 必须能关回去 —— 早期实现只处理非空对象，导致设过就再也关不掉。
+  settingsStore.update({ officialFallback: null })
+  assert.equal(settingsNow(shared).officialFallback, null, 'officialFallback 必须可以设回 null')
+  assert.equal(runtime.decideTarget('trae', 'deepseek-v4.1-flash'), null,
+    '关掉之后必须立刻停止兜底')
+
+  // 收尾：后面的小节（4 起）需要一个「有地方可切」的状态才能验证 retry 链路，
+  // 所以这里把兜底开回来。上面 3a/3c 已经证明默认关、且关得掉。
+  settingsStore.update({ officialFallback: { provider: 'deepseek-account', model: 'deepseek-flash' } })
 
   // ── 4. request-error 触发 retry 且下一请求被改写 ────────────
   //
@@ -169,7 +194,7 @@ async function main() {
   const rewritten = await ctx.waterfall('agent/request', {
     agent: { id: 'agent-1' }, turn: 1, step: 2, signal: { throwIfAborted() {} },
   }, async () => nextSeed)
-  assert.equal(rewritten.provider, 'deepseek-official', '下一请求应被改写为官方兜底')
+  assert.equal(rewritten.provider, 'deepseek-account', '下一请求应被改写为官方兜底')
   assert.equal(rewritten.model, 'deepseek-flash')
   // 换路必须丢掉属于源路由的 reasoningEffort：目标适配器可能不认这个 id。
   assert.equal('reasoningEffort' in rewritten, false,
@@ -788,8 +813,21 @@ async function main() {
 
     await orderPlugin.runtime.syncCatalog()
     orderPlugin.runtime.upsertEndpoint('trae', 'switch-model', { lane: 'channel' })
-    orderPlugin.runtime.upsertEndpoint('qoder', 'switch-model', { lane: 'channel' })
-    orderPlugin.runtime.upsertEndpoint('deepseek-official', 'deepseek-flash', { lane: 'official' })
+    // 目标故意用 `-free` 后缀：它和源接口是**同一族**（归一后都是 switch-model），
+    // 但字符串不同。这样 16a 最后的 model 断言才有判别力——若 lastRoute 记的是
+    // 切换前的路由，model 会是 'switch-model' 而不是 'switch-model-free'。
+    orderPlugin.runtime.upsertEndpoint('qoder', 'switch-model-free', { lane: 'channel' })
+    orderPlugin.runtime.upsertEndpoint('deepseek-account', 'deepseek-flash', { lane: 'official' })
+
+    // 先跑一次正常请求，让插件记下 lastRoute。
+    //
+    // 真实场景里 request-error 永远跟在同一个 agent 的 agent/request 之后，而
+    // payload 里**没有 model**（内核签名如此），插件只能靠 lastRoute 补。不先
+    // 建立 lastRoute 的话 model 会是空串，选路退化成"没有可切目标"——这正是
+    // 这一节原先掩盖的问题：它曾依赖官方的默认兜底才拿到 retry。
+    await orderHolder.ctx.waterfall('agent/request', {
+      agent: { id: 'order-agent' }, turn: 5, step: 0,
+    }, async () => ({ provider: 'trae', model: 'switch-model' }))
 
     // 制造一次待生效切换：request-error 决定 → 下一个 request 落地。
     const retried = await orderHolder.ctx.waterfall('agent/request-error', {

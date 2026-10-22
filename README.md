@@ -4,7 +4,9 @@
 
 **看得见还剩多少，用光了自动换。**
 
-给 [DSH（DeepSeek Harness）](https://github.com/deepseek-ai) 上的 [Our Free Model](https://github.com/Ebony-Vinyl/dsh-our-free-model) 加上**接口配额管理**：实时统计每次对话真正落在哪个接口上、花了多少 token；额度耗尽时自动切到**同名模型的其他接口**；全部第三方接口都不可用时兜底切到 **DeepSeek 官方模型**——对话不中断。右侧栏多一张卡片，把「还剩多少」摊开给你看。
+给 [DSH（DeepSeek Harness）](https://github.com/deepseek-ai) 上的 [Our Free Model](https://github.com/Ebony-Vinyl/dsh-our-free-model) 加上**接口配额管理**：实时统计每次对话真正落在哪个接口上、花了多少 token；额度耗尽时自动切到**同名模型的其他接口**。右侧栏多一张卡片，把「还剩多少」摊开给你看。
+
+> **官方路由默认不兜底。** DSH 内核自带的 `deepseek-account`（DeepSeek 官方账号）是**按量计费**的，和 Our Free Model 的免费车道是两套体系。本插件默认**不会**在你不知情时切过去——额度用尽就如实报错。想开兜底要显式配置 `officialFallback`；面板里官方路由永远单独标成「官方 · 计费」并沉底，不会混在免费车道里。
 
 [![test](https://github.com/dx906/dsh-ofm-quota/actions/workflows/test.yml/badge.svg)](https://github.com/dx906/dsh-ofm-quota/actions/workflows/test.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -41,7 +43,7 @@ Our Free Model 把十几家免费与协付渠道聚合成一个 provider，好�
 
 ### 2. 额度耗尽自动切换
 
-额度耗尽时**自动切到同名模型的其他接口**，全部第三方接口都不可用时兜底切到 DeepSeek 官方模型。
+额度耗尽时**自动切到同名模型的其他接口**。默认到此为止——不再往下走官方计费。
 
 ```
 接口额度耗尽（QUOTA_EXHAUSTED / 429 / 授权失效）
@@ -49,8 +51,13 @@ Our Free Model 把十几家免费与协付渠道聚合成一个 provider，好�
 沿「同名族」找还有额度的备用接口
       ↓
 找得到 → 换过去重跑本 step，对话不中断
-找不到 → 兜底切 DeepSeek 官方模型
+找不到 → 如实报错（默认）
+         └─ 只有显式配了 officialFallback，才切 DeepSeek 官方模型
 ```
+
+**为什么默认不兜底到官方**：`deepseek-account` 是 DSH 内核自带的官方账号路由，**按量计费**。
+自动兜底等于在用户不知情时花钱，而且失败是静默的——用户只会觉得「怎么变慢了」，
+看不到账单。把失败如实抛出去，让用户自己决定值不值得花这个钱，才是正确的默认。
 
 ### 3. 侧边栏卡片
 
@@ -220,7 +227,7 @@ agent/request        → loop 重跑本 step → 读出 pending → 改写 provi
   "maxSwitchesPerStep": 3,
   "cooldownMs": 900000,
   "windowHours": 24,
-  "officialFallback": { "provider": "deepseek-official", "model": "deepseek-flash" },
+  "officialFallback": null,
   "syncCatalog": true,
   "manualQuota": {}
 }
@@ -234,7 +241,7 @@ agent/request        → loop 重跑本 step → 读出 pending → 改写 provi
 | `maxSwitchesPerStep` | `3` | 每 step 最多切换次数（防止链式循环） |
 | `cooldownMs` | `900000` | 失败接口冷却时长（15 分钟） |
 | `windowHours` | `24` | 用量统计窗口 |
-| `officialFallback` | DeepSeek 官方 | 全部第三方不可用时的兜底路由 |
+| `officialFallback` | **`null`（关闭）** | 全部第三方不可用时的兜底路由。**官方按量计费，所以默认关**；开启请写真实 provider id：`{ "provider": "deepseek-account", "model": "deepseek-flash" }` |
 | `syncCatalog` | `true` | 启动时自动从 OFM catalog 同步接口清单 |
 | `manualQuota` | `{}` | 手填额度（真实读取优先，手填只兜底） |
 
@@ -295,7 +302,7 @@ pnpm run test:client       # 仅浏览器半身
 pnpm run deadcode          # 死代码扫描
 ```
 
-`scripts/selftest.mjs`（host 半身，**17 组**）覆盖：三个钩子的真实 payload 形状与返回契约、同名备用接口解析、官方兜底、落盘文件同步（catalog 三种 id 形态 / 渠道账号 / token-ledger）、渠道余额 RPC（owner Peer 与非 owner 403 的对照）、**路由准入围栏的正反例**、**有界内存**（turn 表上限 512、路由表上限 256）、**额度来源优先级（真实读取压过手填）**、HTTP 路由、**死代码审计四条**（账号累加 / 解除冷却 / 失败回写 / reset）。
+`scripts/selftest.mjs`（host 半身，**17 组**）覆盖：三个钩子的真实 payload 形状与返回契约、同名备用接口解析（含官方路由及其旧别名必须被排除）、**官方兜底默认关闭 / 显式开启 / 必须能再关掉**、落盘文件同步（catalog 三种 id 形态 / 渠道账号 / token-ledger）、渠道余额 RPC（owner Peer 与非 owner 403 的对照）、**路由准入围栏的正反例**、**有界内存**（turn 表上限 512、路由表上限 256）、**额度来源优先级（真实读取压过手填）**、HTTP 路由、契约审计三条、**死代码审计四条**（账号累加 / 解除冷却 / 失败回写 / reset）。
 
 `scripts/client-test.mjs` 覆盖：ModuleLoader 入口契约、tab 类型与两个 keyed 席位注册、组件在最小 props 下不抛错、**路由 URL 不得带前导斜杠**（反代前缀或 `dsh-app://` 壳下会 404/跨源）。
 

@@ -52,6 +52,31 @@ const CHANNEL_PROVIDER_LABELS = Object.freeze({
 })
 
 /**
+ * DSH 内核自带的**官方** DeepSeek 账号路由。真实 provider id 是 `deepseek-account`
+ * （`@deepseek-ai/dsh-deepseek-account`，凭据在 `~/.dsh/.credentials.yaml` 的
+ * `deepseek-account-platform/*`）。
+ *
+ * 为什么值得单列一个常量：它和本插件操作的第三方免费车道是**两套计费体系**，
+ * 混淆的代价是真金白银。区分方式就是 provider 前缀——`/v1/models` 返回的每个
+ * model id 都带车道前缀，`deepseek-account/*` 从来不是 Our Free Model 的车道。
+ *
+ * `deepseek-official` 是早期版本写错的 id（不存在），保留在别名表里只为兼容
+ * 已经落盘的旧设置，读到时能正确识别成官方而不是当成一个陌生渠道。
+ */
+const OFFICIAL_PROVIDER = 'deepseek-account'
+const OFFICIAL_PROVIDER_ALIASES = Object.freeze(['deepseek-account', 'deepseek-official'])
+
+/** 该 provider 是否属于官方计费路由（接受裸 id、`id/…` 与 `id-…` 三种形态）。 */
+function isOfficialProvider(provider) {
+  const value = String(provider ?? '')
+  if (value === '') return false
+  for (const alias of OFFICIAL_PROVIDER_ALIASES) {
+    if (value === alias || value.startsWith(`${alias}/`) || value.startsWith(`${alias}-`)) return true
+  }
+  return false
+}
+
+/**
  * 把上游错误消息里的凭据抹掉，再落盘 / 回传浏览器。
  *
  * 为什么必须做：`INVALID_CREDENTIAL` 这类失败的上游响应体经常把收到的 key
@@ -245,8 +270,19 @@ function createSettingsDefaults() {
     maxSwitchesPerStep: 3,
     /** 被切走/失败的接口在这么多毫秒内不再被优先选中。 */
     cooldownMs: 15 * 60 * 1000,
-    /** 全部第三方接口用尽后落到的官方路由。 */
-    officialFallback: { provider: 'deepseek-official', model: 'deepseek-flash' },
+    /**
+     * 全部第三方接口用尽后落到的官方路由。**默认关闭（null）**。
+     *
+     * 为什么默认关：官方路由（`deepseek-account/*`，DSH 内核自带）是**按量计费**的，
+     * 而本插件的其余部分只操作免费车道。自动"兜底"到官方 = 在用户不知情时花钱，
+     * 而且失败是静默的（用户只看到回答变慢/变贵，看不到扣费）。额度耗尽的正确
+     * 默认行为是**把失败如实抛给用户**，而不是替他决定花钱。
+     *
+     * 想开的话把这里设成 `{ provider: 'deepseek-account', model: 'deepseek-flash' }`
+     * （或用面板/API 设置）。注意 provider 必须是真实 id `deepseek-account`——
+     * 早期版本误写成 `deepseek-official`，那个 id 不存在，兜底即使触发也找不到。
+     */
+    officialFallback: null,
     /** 是否允许启动时自动从 Our Free Model 的 catalog 同步接口清单。 */
     syncCatalog: true,
     /** 计算「剩余额度」时用的周期窗口（小时），仅用于按量估算展示。 */
@@ -1008,7 +1044,7 @@ function createQuotaRuntime({ ctx, logger, config, store }) {
     if (value === 'free' || provider === 'our-free-model') return 'requests'
     if (value === 'eac') return 'requests'
     if (value === 'kilo') return 'token'
-    if (provider === 'deepseek-official') return 'token'
+    if (provider === OFFICIAL_PROVIDER) return 'token'
     return 'credits'
   }
 
@@ -1110,7 +1146,11 @@ function createQuotaRuntime({ ctx, logger, config, store }) {
     const rows = []
     for (const entry of endpointIndex.values()) {
       if (entry.provider === provider) continue
-      if (entry.provider === (settings.get().officialFallback?.provider ?? '')) continue
+      // 官方路由**永远**不是同名备用接口——它按量计费，不属于「免费车道互备」的
+      // 范围。这里必须按 provider 本身判断，不能只看 officialFallback 里写的名字：
+      // 用户把兜底关掉（null）之后，旧写法会退化成一个空串比较，官方路由就会被
+      // 当成普通候选，静默产生费用。
+      if (isOfficialProvider(entry.provider)) continue
       if (family === '' || modelFamily(entry.model) !== family) continue
       const blocked = (entry.blockedUntil ?? 0) > now
       const exhausted = entry.quotaKnown === true && entry.quotaRemaining <= 0
@@ -1746,7 +1786,12 @@ function createQuotaRuntime({ ctx, logger, config, store }) {
     if (Number.isFinite(body.windowHours) && body.windowHours >= 1) {
       patch.windowHours = Math.min(Number(body.windowHours), 24 * 30)
     }
-    if (body.officialFallback !== null && typeof body.officialFallback === 'object') {
+    // 显式 null / false 是「关掉官方兜底」的唯一表达方式，必须放行：否则一旦
+    // 设过（哪怕是通过旧版本的默认值）就再也关不掉——旧值会一直留在盘上生效。
+    // 早期实现只处理非空对象，导致 officialFallback 事实上无法关闭。
+    if (body.officialFallback === null || body.officialFallback === false) {
+      patch.officialFallback = null
+    } else if (typeof body.officialFallback === 'object') {
       const provider = String(body.officialFallback.provider ?? '').trim()
       const model = String(body.officialFallback.model ?? '').trim()
       if (provider !== '' && model !== '') patch.officialFallback = { provider, model }
@@ -1976,6 +2021,9 @@ function createQuotaRuntime({ ctx, logger, config, store }) {
       cards.push({
         provider,
         displayName: providerLabelOf(provider),
+        // 官方计费路由。面板据此把它和免费车道**显式分开**——它出现在这里只说明
+        // 「有过调用记录」，不代表它是一条可用的免费车道，更不代表本插件会用它。
+        official: isOfficialProvider(provider),
         accountCount: accounts?.accounts ?? cachedRows.length,
         enabled: accounts === null ? cachedRows.length > 0 : accounts.enabled === true,
         expiresAt: accounts?.expiresAt ?? 0,
@@ -1991,6 +2039,9 @@ function createQuotaRuntime({ ctx, logger, config, store }) {
       })
     }
     return cards.sort((a, b) => {
+      // 官方计费路由永远沉底：它在语义上不是「渠道」，混在免费车道里排序会让人
+      // 误以为它也是一条可用车道。
+      if (a.official !== b.official) return a.official ? 1 : -1
       if (a.quotaKnown !== b.quotaKnown) return a.quotaKnown ? -1 : 1
       if (b.remaining !== a.remaining) return b.remaining - a.remaining
       return a.provider.localeCompare(b.provider)
@@ -2001,6 +2052,10 @@ function createQuotaRuntime({ ctx, logger, config, store }) {
   const PROVIDER_LABELS = CHANNEL_PROVIDER_LABELS
 
   function providerLabelOf(provider) {
+    // 官方路由不进 CHANNEL_PROVIDER_LABELS：那张表同时是 `/balances` 的白名单，
+    // 往里加官方会让我们去读一个按量计费的账号余额（既无意义又多一次外联）。
+    // 但它需要在面板上有一个说得清的名字，所以在这里单独给。
+    if (isOfficialProvider(provider)) return 'DeepSeek 官方（计费）'
     return PROVIDER_LABELS[provider] ?? provider
   }
 
