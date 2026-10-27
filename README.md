@@ -108,7 +108,7 @@ mkdir -p "$DSH_HOME/profiles/desktop/vendor"
 pnpm pack --pack-destination "$DSH_HOME/profiles/desktop/vendor"
 
 # 2. 在 profile/package.json 的 dependencies 加一行：
-#    "dsh-ofm-quota": "file:./vendor/dsh-ofm-quota-0.1.0.tgz"
+#    "dsh-ofm-quota": "file:./vendor/dsh-ofm-quota-0.1.1.tgz"
 
 # 3. 在 profile/package.json 的 dsh.profile.bundles 末尾追加：
 #    "dsh-ofm-quota"

@@ -49,6 +49,7 @@ const CHANNEL_PROVIDER_LABELS = Object.freeze({
   zcode: 'ZCode（智谱）',
   gemini: 'Gemini',
   opencode: 'opencode',
+  'deepseek-web': 'DeepSeek 网页版',
 })
 
 /**
@@ -1887,6 +1888,30 @@ function createQuotaRuntime({ ctx, logger, config, store }) {
 
   /* ── 视图 ─────────────────────────────────────────────────── */
 
+  /**
+   * 解析端点应归属的车道（面板分组用）。
+   *
+   * 经过渠道包的端点由 token-ledger 写入 lane（'channel' / 'free' 等）；
+   * 不经过渠道包的端点（如 codebuddy-cli-cn、deepseek-web）没有这个来源，
+   * 其 lane 可能是以下几种「无效值」：
+   *   - 空串 ''
+   *   - 已有的字面量字符串 'undefined'（历史落盘遗留，注意不是 undefined 值）
+   * 这些都不能直接用作分组 key，否则端点会掉进 unknown 桶甚至从面板消失。
+   * 对这类端点，若 provider 已在 CHANNEL_PROVIDER_LABELS 白名单内（用户认可的
+   * 已知渠道）且不是官方计费路由，则归到 'channel' 渠道车道。
+   *
+   * @param entry endpointIndex 里的端点条目。
+   * @returns 车道 key；无法判定时返回 ''（调用方会归到 unknown）。
+   */
+  function laneOfEntry(entry) {
+    const raw = entry.lane
+    const hasLane = typeof raw === 'string' && raw !== '' && raw !== 'undefined'
+    if (hasLane) return raw
+    const known = Object.prototype.hasOwnProperty.call(CHANNEL_PROVIDER_LABELS, entry.provider)
+    if (known && !isOfficialProvider(entry.provider)) return 'channel'
+    return ''
+  }
+
   function buildEndpointRows() {
     const now = Date.now()
     const ledgerState = ledger.get()
@@ -1917,7 +1942,11 @@ function createQuotaRuntime({ ctx, logger, config, store }) {
         provider: entry.provider,
         model: entry.model,
         name: entry.displayName,
-        lane: entry.lane,
+        // 不经过渠道包的车道（如 codebuddy-cli-cn、deepseek-web）用量不进
+        // token-ledger，lane 可能是空串、也可能是字面量字符串 "undefined"
+        // （历史落盘遗留）。两者都视为「未归属」，再按白名单补成 'channel'，
+        // 让面板按渠道车道分组而不是塞进 unknown 或直接消失。
+        lane: laneOfEntry(entry),
         unit: (quotaFromManual ? manualRow.unit : undefined)
           ?? (entry.quotaUnit !== 'unknown' ? entry.quotaUnit : quotaUnitOf(entry.provider, entry.lane)),
         quotaKnown: observed || manualRow !== null,

@@ -110,7 +110,7 @@ mkdir -p "$DSH_HOME/profiles/desktop/vendor"
 pnpm pack --pack-destination "$DSH_HOME/profiles/desktop/vendor"
 
 # 2. Add a line to the profile's package.json dependencies:
-#    "dsh-ofm-quota": "file:./vendor/dsh-ofm-quota-0.1.0.tgz"
+#    "dsh-ofm-quota": "file:./vendor/dsh-ofm-quota-0.1.1.tgz"
 
 # 3. Append to the end of dsh.profile.bundles in the profile's package.json:
 #    "dsh-ofm-quota"

@@ -1,6 +1,6 @@
 {
   "name": "dsh-ofm-quota",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "DSH 配额管理插件：实时统计每次对话所用接口的积分/Token 消耗，接口额度耗尽时自动切换到同名模型的备用接口，并提供右侧栏卡片展示各接口剩余额度。官方路由（deepseek-account）按量计费，默认**不**参与自动兜底（可显式开启），面板会把它单独标为「官方 · 计费」。",
